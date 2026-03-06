@@ -1,63 +1,41 @@
 <?php
 /**
- * GreenClean Vietnam – contact.php
- * Xử lý form liên hệ, gửi mail qua Gmail SMTP bằng PHPMailer
+ * CÔNG TY CỔ PHẦN KỸ THUẬT AAS – contact.php
+ * Gửi mail qua SendGrid API (HTTPS) – không dùng SMTP
+ * Render free tier không chặn HTTPS outbound
  *
- * ===================== SETUP =====================
- * 1. Upload thư mục này lên hosting (cùng cấp index.html)
- * 2. Vào Gmail → Tài khoản Google → Bảo mật
- *    → Bật "Xác minh 2 bước" trước
- *    → Tìm "Mật khẩu ứng dụng" → Tạo mật khẩu cho "Mail"
- *    → Copy 16 ký tự (VD: abcd efgh ijkl mnop)
- * 3. Điền thông tin vào phần CẤU HÌNH bên dưới
- * =================================================
+ * SETUP:
+ * 1. Đăng ký miễn phí tại sendgrid.com
+ * 2. Vào Settings → API Keys → Create API Key → Full Access
+ * 3. Thêm vào Render Environment Variables:
+ *    SENDGRID_API_KEY = SG.xxxxxxxxxxxxxxxx
+ *    MAIL_TO          = email-nhan@cty.vn
+ *    MAIL_FROM        = email-gui@gmail.com  (phải verify trên SendGrid)
+ *    ALLOWED_ORIGIN   = https://aas-vn.netlify.app
  */
 
-// ==================== CẤU HÌNH ====================
-// Đọc từ Environment Variables của Render (không hardcode credential)
-// Vào Render Dashboard → Environment → thêm các biến bên dưới
-define('SMTP_HOST',     'smtp.gmail.com');
-define('SMTP_PORT',     587);
-define('SMTP_USER',     getenv('SMTP_USER')     ?: 'tungkatu1901@gmail.com');
-define('SMTP_PASS',     getenv('SMTP_PASS')     ?: '');
-define('MAIL_TO',       getenv('MAIL_TO')       ?: 'tungkatu1901@gmail.com');
-define('MAIL_TO_NAME',  getenv('MAIL_TO_NAME')  ?: 'CÔNG TY CỔ PHẦN KỸ THUẬT AAS');
-define('ALLOWED_ORIGIN',getenv('ALLOWED_ORIGIN')?: 'https://aas-vn.netlify.app');
-// ===================================================
-
 header('Content-Type: application/json; charset=utf-8');
-header('Access-Control-Allow-Origin: ' . ALLOWED_ORIGIN);
+
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '*';
+$allowed = getenv('ALLOWED_ORIGIN') ?: '*';
+$corsOrigin = ($allowed === '*') ? '*' : $origin;
+
+header('Access-Control-Allow-Origin: ' . $corsOrigin);
 header('Access-Control-Allow-Methods: POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
 
-// Preflight
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204); exit;
 }
-
-// Chỉ chấp nhận POST
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
-    echo json_encode(['ok' => false, 'error' => 'Method not allowed']);
-    exit;
+    echo json_encode(['ok' => false, 'error' => 'Method not allowed']); exit;
 }
 
-// ── Đọc JSON body ──
-$raw  = file_get_contents('php://input');
-$data = json_decode($raw, true);
-if (!$data) {
-    http_response_code(400);
-    echo json_encode(['ok' => false, 'error' => 'Invalid JSON']);
-    exit;
-}
-
-// ── Rate-limit đơn giản theo IP (file-based) ──
+// ── Rate limit theo IP ──
 $ip       = $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-$ipHash   = md5($ip);
-$rateFile = sys_get_temp_dir() . '/gc_rl_' . $ipHash . '.txt';
-$window   = 60; // giây
-$maxReq   = 3;  // tối đa 3 request trong $window giây
-
+$rateFile = sys_get_temp_dir() . '/gc_rl_' . md5($ip) . '.txt';
+$window   = 60; $maxReq = 3;
 $requests = [];
 if (file_exists($rateFile)) {
     $requests = array_filter(
@@ -67,24 +45,27 @@ if (file_exists($rateFile)) {
 }
 if (count($requests) >= $maxReq) {
     http_response_code(429);
-    echo json_encode(['ok' => false, 'error' => 'Quá nhiều yêu cầu. Vui lòng thử lại sau ít phút.']);
-    exit;
+    echo json_encode(['ok' => false, 'error' => 'Quá nhiều yêu cầu. Thử lại sau ít phút.']); exit;
 }
 $requests[] = time();
 file_put_contents($rateFile, json_encode(array_values($requests)));
 
-// ── Lấy & làm sạch dữ liệu ──
+// ── Parse body ──
+$data = json_decode(file_get_contents('php://input'), true);
+if (!$data) {
+    http_response_code(400);
+    echo json_encode(['ok' => false, 'error' => 'Invalid JSON']); exit;
+}
+
 $name    = trim(strip_tags($data['name']    ?? ''));
 $phone   = preg_replace('/\s+/', '', strip_tags($data['phone'] ?? ''));
 $email   = trim(strip_tags($data['email']   ?? ''));
 $service = trim(strip_tags($data['service'] ?? ''));
 $note    = trim(strip_tags($data['note']    ?? ''));
-$website = trim($data['website'] ?? ''); // honeypot
+$website = trim($data['website'] ?? '');
 
 // ── Honeypot ──
-if ($website !== '') {
-    echo json_encode(['ok' => true]); exit; // giả vờ thành công
-}
+if ($website !== '') { echo json_encode(['ok' => true]); exit; }
 
 // ── Validate ──
 if (mb_strlen($name) < 2) {
@@ -100,62 +81,89 @@ if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
     echo json_encode(['ok' => false, 'error' => 'Email không hợp lệ.']); exit;
 }
 
-// ── Load PHPMailer qua Composer autoload ──
-require __DIR__ . '/vendor/autoload.php';
+// ── Config từ Render Environment Variables ──
+$sgApiKey  = getenv('SENDGRID_API_KEY') ?: '';
+$mailTo    = getenv('MAIL_TO')          ?: '';
+$mailFrom  = getenv('MAIL_FROM')        ?: $mailTo;
+$mailName  = getenv('MAIL_TO_NAME')     ?: 'CÔNG TY CỔ PHẦN KỸ THUẬT AAS';
+$time      = (new DateTime('now', new DateTimeZone('Asia/Ho_Chi_Minh')))->format('d/m/Y H:i:s');
 
-use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\Exception;
+if (!$sgApiKey || !$mailTo) {
+    http_response_code(500);
+    echo json_encode(['ok' => false, 'error' => 'Server chưa cấu hình email.']); exit;
+}
 
-// ── Build & gửi mail ──
-$time = (new DateTime('now', new DateTimeZone('Asia/Ho_Chi_Minh')))->format('d/m/Y H:i:s');
+// ── Build HTML email ──
+$rows = "
+  <tr><td style='padding:10px 0;color:#5a6a72;width:38%'>👤 Họ và tên</td><td style='padding:10px 0;font-weight:600;color:#1a2330'>" . htmlspecialchars($name) . "</td></tr>
+  <tr style='background:#f7faf8'><td style='padding:10px 8px;color:#5a6a72'>📞 Số điện thoại</td><td style='padding:10px 8px;font-weight:700;color:#1a2330'>" . htmlspecialchars($phone) . "</td></tr>";
+if ($email)   $rows .= "<tr><td style='padding:10px 0;color:#5a6a72'>📧 Email</td><td style='padding:10px 0;color:#1a2330'>" . htmlspecialchars($email) . "</td></tr>";
+if ($service) $rows .= "<tr style='background:#f7faf8'><td style='padding:10px 8px;color:#5a6a72'>🔧 Dịch vụ</td><td style='padding:10px 8px;color:#1a2330'>" . htmlspecialchars($service) . "</td></tr>";
+if ($note)    $rows .= "<tr><td style='padding:10px 0;color:#5a6a72;vertical-align:top'>📝 Ghi chú</td><td style='padding:10px 0;color:#1a2330'>" . nl2br(htmlspecialchars($note)) . "</td></tr>";
+$rows .= "<tr style='background:#f7faf8'><td style='padding:10px 8px;color:#5a6a72'>⏰ Thời gian</td><td style='padding:10px 8px;color:#1a2330'>{$time}</td></tr>";
 
 $htmlBody = "
 <div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border:1px solid #e0e8e4;border-radius:12px;overflow:hidden'>
-  <div style='background:linear-gradient(135deg,#0f5c33,#1a8c4e);padding:28px 32px'>
-    <h2 style='color:#fff;margin:0;font-size:20px'>🌿 GreenClean Vietnam</h2>
+  <div style='background:#0f5c33;padding:28px 32px'>
+    <h2 style='color:#fff;margin:0;font-size:20px'>🌿 CÔNG TY CỔ PHẦN KỸ THUẬT AAS</h2>
     <p style='color:rgba(255,255,255,.8);margin:6px 0 0;font-size:14px'>Yêu cầu tư vấn mới từ website</p>
   </div>
   <div style='padding:28px 32px;background:#fff'>
-    <table style='width:100%;border-collapse:collapse;font-size:15px'>
-      <tr><td style='padding:10px 0;color:#5a6a72;width:40%'>👤 Họ và tên</td><td style='padding:10px 0;font-weight:600;color:#1a2330'>" . htmlspecialchars($name) . "</td></tr>
-      <tr style='background:#f7faf8'><td style='padding:10px 8px;color:#5a6a72'>📞 Số điện thoại</td><td style='padding:10px 8px;font-weight:600;color:#1a2330'>" . htmlspecialchars($phone) . "</td></tr>
-      " . ($email   ? "<tr><td style='padding:10px 0;color:#5a6a72'>📧 Email</td><td style='padding:10px 0;color:#1a2330'>" . htmlspecialchars($email) . "</td></tr>" : '') . "
-      " . ($service ? "<tr style='background:#f7faf8'><td style='padding:10px 8px;color:#5a6a72'>🔧 Dịch vụ</td><td style='padding:10px 8px;color:#1a2330'>" . htmlspecialchars($service) . "</td></tr>" : '') . "
-      " . ($note    ? "<tr><td style='padding:10px 0;color:#5a6a72;vertical-align:top'>📝 Ghi chú</td><td style='padding:10px 0;color:#1a2330'>" . nl2br(htmlspecialchars($note)) . "</td></tr>" : '') . "
-      <tr style='background:#f7faf8'><td style='padding:10px 8px;color:#5a6a72'>⏰ Thời gian</td><td style='padding:10px 8px;color:#1a2330'>{$time}</td></tr>
-    </table>
+    <table style='width:100%;border-collapse:collapse;font-size:15px'>{$rows}</table>
   </div>
   <div style='background:#e8f7ef;padding:16px 32px;text-align:center'>
-    <p style='color:#0f5c33;font-size:13px;margin:0'>Email này được gửi tự động từ website GreenClean Vietnam</p>
+    <p style='color:#0f5c33;font-size:13px;margin:0'>Email tự động từ website CÔNG TY CỔ PHẦN KỸ THUẬT AAS</p>
   </div>
-</div>
-";
+</div>";
 
-try {
-    $mail = new PHPMailer(true);
-    $mail->isSMTP();
-    $mail->Host       = SMTP_HOST;
-    $mail->SMTPAuth   = true;
-    $mail->Username   = SMTP_USER;
-    $mail->Password   = SMTP_PASS;
-    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-    $mail->Port       = SMTP_PORT;
-    $mail->CharSet    = 'UTF-8';
+$textBody = "Họ tên: $name\nSĐT: $phone\nEmail: $email\nDịch vụ: $service\nGhi chú: $note\nThời gian: $time";
 
-    $mail->setFrom(SMTP_USER, 'GreenClean Website');
-    $mail->addAddress(MAIL_TO, MAIL_TO_NAME);
-    if ($email) $mail->addReplyTo($email, $name); // reply thẳng về khách
+// ── Gửi qua SendGrid API (HTTPS – Render không chặn) ──
+$payload = [
+    'personalizations' => [[
+        'to' => [['email' => $mailTo, 'name' => $mailName]],
+        'subject' => "🌿 Yêu cầu tư vấn: {$name} – {$phone}",
+    ]],
+    'from'    => ['email' => $mailFrom, 'name' => 'AAS Website'],
+    'content' => [
+        ['type' => 'text/plain', 'value' => $textBody],
+        ['type' => 'text/html',  'value' => $htmlBody],
+    ],
+];
 
-    $mail->isHTML(true);
-    $mail->Subject = '🌿 GreenClean – Yêu cầu tư vấn: ' . $name . ' – ' . $phone;
-    $mail->Body    = $htmlBody;
-    $mail->AltBody = "Họ tên: $name\nSĐT: $phone\nEmail: $email\nDịch vụ: $service\nGhi chú: $note\nThời gian: $time";
-
-    $mail->send();
-    echo json_encode(['ok' => true]);
-
-} catch (Exception $e) {
-    http_response_code(502);
-    error_log('[GreenClean] Mailer error: ' . $mail->ErrorInfo);
-    echo json_encode(['ok' => false, 'error' => 'Gửi mail thất bại. Vui lòng thử lại.']);
+// Nếu khách có email → reply-to về khách
+if ($email) {
+    $payload['reply_to'] = ['email' => $email, 'name' => $name];
 }
+
+$ch = curl_init('https://api.sendgrid.com/v3/mail/send');
+curl_setopt_array($ch, [
+    CURLOPT_POST           => true,
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_HTTPHEADER     => [
+        'Authorization: Bearer ' . $sgApiKey,
+        'Content-Type: application/json',
+    ],
+    CURLOPT_POSTFIELDS     => json_encode($payload),
+    CURLOPT_TIMEOUT        => 15,
+]);
+
+$response = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$curlErr  = curl_error($ch);
+curl_close($ch);
+
+if ($curlErr) {
+    error_log("[CÔNG TY CỔ PHẦN KỸ THUẬT AAS] cURL error: $curlErr");
+    http_response_code(502);
+    echo json_encode(['ok' => false, 'error' => 'Không thể kết nối đến mail server.']); exit;
+}
+
+// SendGrid trả về 202 = thành công
+if ($httpCode === 202) {
+    echo json_encode(['ok' => true]); exit;
+}
+
+error_log("[CÔNG TY CỔ PHẦN KỸ THUẬT AAS] SendGrid error $httpCode: $response");
+http_response_code(502);
+echo json_encode(['ok' => false, 'error' => 'Gửi mail thất bại. Vui lòng thử lại.']);
