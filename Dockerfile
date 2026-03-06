@@ -1,28 +1,37 @@
 FROM php:8.2-apache
 
-# Bật mod_rewrite để Apache xử lý routing
+# Bật mod_rewrite + headers
 RUN a2enmod rewrite headers
 
-# Cài extension cần thiết cho PHPMailer + SSL
+# Cài các package hệ thống + extension PHP cần thiết
 RUN apt-get update && apt-get install -y \
+    libzip-dev \
     libssl-dev \
     ca-certificates \
+    unzip \
+    git \
+    && docker-php-ext-install zip \
     && rm -rf /var/lib/apt/lists/*
 
-# Cài Composer
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+# Cài Composer từ image chính thức
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# Copy toàn bộ code vào Apache web root
+# Set WORKDIR
 WORKDIR /var/www/html
-COPY . .
 
-# Cài PHPMailer qua Composer
-RUN composer require phpmailer/phpmailer --no-interaction --no-progress
+# Copy composer.json trước để tận dụng Docker cache
+COPY composer.json .
+
+# Cài PHPMailer
+RUN composer install --no-dev --no-interaction --no-progress --optimize-autoloader
+
+# Copy toàn bộ code còn lại
+COPY . .
 
 # Phân quyền
 RUN chown -R www-data:www-data /var/www/html
 
-# Cấu hình Apache: cho phép .htaccess
+# Cho phép .htaccess override
 RUN echo '<Directory /var/www/html>\n\
     AllowOverride All\n\
     Require all granted\n\
