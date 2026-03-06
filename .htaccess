@@ -1,0 +1,12 @@
+Options -Indexes
+RewriteEngine On
+
+# Health check cho Render
+RewriteRule ^health$ health.php [L]
+
+# Mọi POST request về contact.php
+RewriteCond %{REQUEST_METHOD} POST
+RewriteRule ^contact$ contact.php [L]
+
+# Chặn truy cập file nhạy cảm
+RewriteRule ^(composer\.|Dockerfile|\.env) - [F,L]
