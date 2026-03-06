@@ -3,9 +3,6 @@ FROM php:8.2-apache
 # Bật mod_rewrite + headers
 RUN a2enmod rewrite headers
 
-# Cài curl extension cho PHP (dùng để gọi SendGrid API)
-RUN docker-php-ext-install curl
-
 # Cho phép .htaccess
 RUN echo '<Directory /var/www/html>\n\
     AllowOverride All\n\
