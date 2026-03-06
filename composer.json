@@ -1,6 +1,6 @@
 {
   "name": "aas/contact-api",
-  "description": "CÔNG TY CỔ PHẦN KỸ THUẬT AAS – Contact form API",
+  "description": "CÔNG TY TNHH KỸ THUẬT AAS – Contact form API",
   "require": {
     "php": ">=7.4",
     "phpmailer/phpmailer": "^6.9"
