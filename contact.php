@@ -1,6 +1,6 @@
 <?php
 /**
- * CÔNG TY CỔ PHẦN KỸ THUẬT AAS – contact.php
+ * CÔNG TY TNHH KỸ THUẬT AAS – contact.php
  * Gửi mail qua SendGrid API (HTTPS) – không dùng SMTP
  * Render free tier không chặn HTTPS outbound
  *
@@ -85,7 +85,7 @@ if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
 $sgApiKey  = getenv('SENDGRID_API_KEY') ?: '';
 $mailTo    = getenv('MAIL_TO')          ?: '';
 $mailFrom  = getenv('MAIL_FROM')        ?: $mailTo;
-$mailName  = getenv('MAIL_TO_NAME')     ?: 'CÔNG TY CỔ PHẦN KỸ THUẬT AAS';
+$mailName  = getenv('MAIL_TO_NAME')     ?: 'CÔNG TY TNHH KỸ THUẬT AAS';
 $time      = (new DateTime('now', new DateTimeZone('Asia/Ho_Chi_Minh')))->format('d/m/Y H:i:s');
 
 if (!$sgApiKey || !$mailTo) {
@@ -105,14 +105,14 @@ $rows .= "<tr style='background:#f7faf8'><td style='padding:10px 8px;color:#5a6a
 $htmlBody = "
 <div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border:1px solid #e0e8e4;border-radius:12px;overflow:hidden'>
   <div style='background:#0f5c33;padding:28px 32px'>
-    <h2 style='color:#fff;margin:0;font-size:20px'>🌿 CÔNG TY CỔ PHẦN KỸ THUẬT AAS</h2>
+    <h2 style='color:#fff;margin:0;font-size:20px'>🌿 CÔNG TY TNHH KỸ THUẬT AAS</h2>
     <p style='color:rgba(255,255,255,.8);margin:6px 0 0;font-size:14px'>Yêu cầu tư vấn mới từ website</p>
   </div>
   <div style='padding:28px 32px;background:#fff'>
     <table style='width:100%;border-collapse:collapse;font-size:15px'>{$rows}</table>
   </div>
   <div style='background:#e8f7ef;padding:16px 32px;text-align:center'>
-    <p style='color:#0f5c33;font-size:13px;margin:0'>Email tự động từ website CÔNG TY CỔ PHẦN KỸ THUẬT AAS</p>
+    <p style='color:#0f5c33;font-size:13px;margin:0'>Email tự động từ website CÔNG TY TNHH KỸ THUẬT AAS</p>
   </div>
 </div>";
 
@@ -154,7 +154,7 @@ $curlErr  = curl_error($ch);
 curl_close($ch);
 
 if ($curlErr) {
-    error_log("[CÔNG TY CỔ PHẦN KỸ THUẬT AAS] cURL error: $curlErr");
+    error_log("[CÔNG TY TNHH KỸ THUẬT AAS] cURL error: $curlErr");
     http_response_code(502);
     echo json_encode(['ok' => false, 'error' => 'Không thể kết nối đến mail server.']); exit;
 }
@@ -164,6 +164,6 @@ if ($httpCode === 202) {
     echo json_encode(['ok' => true]); exit;
 }
 
-error_log("[CÔNG TY CỔ PHẦN KỸ THUẬT AAS] SendGrid error $httpCode: $response");
+error_log("[CÔNG TY TNHH KỸ THUẬT AAS] SendGrid error $httpCode: $response");
 http_response_code(502);
 echo json_encode(['ok' => false, 'error' => 'Gửi mail thất bại. Vui lòng thử lại.']);
